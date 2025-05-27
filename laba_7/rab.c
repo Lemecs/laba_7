@@ -271,51 +271,127 @@ int main(int argc, char* argv[]) {
 #endif 
 
 #ifdef TASK_5
-int main(int argc, char* argv[]) {
+#define MAX_LINE_LEN 1024
+#define MAX_FILES     100
+
+void prompt_name(const char* which, char* buf, size_t sz) {
+    printf("Введите имя %s: ", which);
+    if (!fgets(buf, (int)sz, stdin)) {
+        fprintf(stderr, "Ошибка ввода\n");
+        exit(1);
+    }
+    buf[strcspn(buf, "\r\n")] = '\0';
+}
+
+unsigned long prompt_ulong(const char* msg) {
     char* locale = setlocale(LC_ALL, "");
-    if (argc < 4) {
-        fprintf(stderr, "Используйте: %s N fres f1 f2...\n", argv[0]);
-        return 1;
+    char buf[MAX_LINE_LEN];
+    printf("%s", msg);
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        fprintf(stderr, "Ошибка ввода\n");
+        exit(1);
+    }
+    buf[strcspn(buf, "\r\n")] = '\0';
+    char* end;
+    unsigned long v = strtoul(buf, &end, 10);
+    if (end == buf || *end != '\0') {
+        fprintf(stderr, "Неверное число: %s\n", buf);
+        exit(1);
+    }
+    return v;
+}
+
+int prompt_int(const char* msg) {
+    char buf[MAX_LINE_LEN];
+    printf("%s", msg);
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        fprintf(stderr, "Ошибка ввода\n");
+        exit(1);
+    }
+    return atoi(buf);
+}
+
+int main(int argc, char* argv[]) {
+    unsigned long N;
+    char fres[MAX_LINE_LEN];
+    int  file_count;
+    char files[MAX_FILES][MAX_LINE_LEN];
+
+    if (argc >= 4) {
+        // взяли из argv
+        N = strtoul(argv[1], NULL, 10);
+        strcpy(fres, argv[2]);
+        file_count = argc - 3;
+        if (file_count > MAX_FILES) file_count = MAX_FILES;
+        for (int i = 0; i < file_count; i++) {
+            strcpy(files[i], argv[3 + i]);
+        }
+    }
+    else {
+        // спрашиваем у пользователя
+        N = prompt_ulong("Введите пороговый размер N (в байтах): ");
+        prompt_name("файла-результата", fres, sizeof(fres));
+        file_count = prompt_int("Сколько файлов проанализировать? ");
+        if (file_count < 1 || file_count > MAX_FILES) {
+            fprintf(stderr, "Неверное количество файлов\n");
+            return 1;
+        }
+        for (int i = 0; i < file_count; i++) {
+            char which[MAX_LINE_LEN];
+            snprintf(which, sizeof(which), "%d-го входного файла", i + 1);
+            prompt_name(which, files[i], sizeof(files[i]));
+        }
     }
 
-    int N = atoi(argv[1]);          // Число N передается первым аргументом
-    const char* result_filename = argv[2];  // Имя файла-результата
-
-    FILE* result_file = fopen(result_filename, "wb");
-    if (!result_file) {
+    // Открываем файл-результат для записи
+    FILE* fres_f = NULL;
+    if (fopen_s(&fres_f, fres, "wb") != 0 || !fres_f) {
         perror("Ошибка открытия файла-результата");
-        return 1;
+        return 2;
     }
 
-    // Перебираем все оставшиеся аргументы (это имена файлов)
-    for (int i = 3; i < argc; i++) {
-        struct stat st;
-        if (stat(argv[i], &st) == -1) {
-            perror("Ошибка проверки размера файла");
+    // Обрабатываем каждый входной файл
+    for (int i = 0; i < file_count; i++) {
+        const char* fname = files[i];
+        FILE* fin = NULL;
+        if (fopen_s(&fin, fname, "rb") != 0 || !fin) {
+            fprintf(stderr, "Не удалось открыть \"%s\" — пропускаем\n", fname);
             continue;
         }
 
-        // Если размер файла меньше N, копируем его содержимое в файл-результат
-        if (st.st_size < N) {
-            FILE* current_file = fopen(argv[i], "rb");
-            if (!current_file) {
-                perror("Ошибка открытия текущего файла");
-                continue;
-            }
-
-            unsigned char buffer[BUFSIZ];     // Буфер для чтения
-            size_t bytes_read;
-
-            // Копирование содержимого файла в файл-результат
-            while ((bytes_read = fread(buffer, 1, BUFSIZ, current_file))) {
-                fwrite(buffer, 1, bytes_read, result_file);
-            }
-
-            fclose(current_file);
+        // Узнаём размер
+        if (fseek(fin, 0, SEEK_END) != 0) {
+            perror("fseek");
+            fclose(fin);
+            continue;
         }
+        long size = ftell(fin);
+        rewind(fin);
+
+        if (size < 0) {
+            perror("ftell");
+            fclose(fin);
+            continue;
+        }
+
+        if ((unsigned long)size < N) {
+            // Копируем весь файл в fres
+            char buffer[4096];
+            size_t r;
+            while ((r = fread(buffer, 1, sizeof(buffer), fin)) > 0) {
+                fwrite(buffer, 1, r, fres_f);
+            }
+            printf("Скопирован \"%s\" (%ld байт)\n", fname, size);
+        }
+        else {
+            printf("Пропущен  \"%s\" (%ld байт ≥ %lu)\n", fname, size, N);
+        }
+
+        fclose(fin);
     }
 
-    fclose(result_file);
+    fclose(fres_f);
+    printf("Готово, результат в файле \"%s\"\n", fres);
     return 0;
 }
 
